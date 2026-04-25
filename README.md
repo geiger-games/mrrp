@@ -1,5 +1,6 @@
 # mrrp
 Massive Repository of Random Projects
+
 *The AUR of the Purrnux Linux distribution*
 
 All files are part of the Purrnux Linux distribution's ecosystem.
