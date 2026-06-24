@@ -1,8 +1,12 @@
 #!/usr/bin/zsh
-## TODO: Test script with bash.
 
 if [ -z "$(command -v gum)" ]; then
   echo "ERROR: dependency gum not satisfied."
+  exit 1
+fi
+
+if [ -z "$(command -v yq)" ]; then
+  echo "ERROR: dependency yq not satisfied."
   exit 1
 fi
 
@@ -23,30 +27,91 @@ case $XDG_SESSION_TYPE in
   ;;
 esac
 
-declare -g env_version="1.1.0"
+declare -g env_version="3.2.1"
+
+declare -g conf_path=$HOME/.config/nabcat.yaml
+if [ ! -f $conf_path ]; then
+  <<EOF > $conf_path
+env:
+  cat-dir: "~/Pictures/Cats/"
+  do-copy: true
+  verbose: false
+  return-found: true
+backend-defs:
+  clipboard:
+    - &wayland wl-copy <
+    - &x11 xsel --selection --clipboard -t image/png -i
+  viewer:
+    - &viu viu -w 30
+  picker:
+    - &gum gum filter
+    - &fzf fzf --style=full
+backends:
+  clipboard: *$XDG_SESSION_TYPE
+  viewer: *viu
+  picker: *fzf
+EOF
+fi
+
+function read_config() {
+  
+  declare -g env_prog_clipboard=$(yq e -o shell '.backends.clipboard' $conf_path | sed 's|value=||g' | sed "s|'||g")
+  declare -g env_prog_viewer=$(yq e -o shell '.backends.viewer' $conf_path | sed 's|value=||g' | sed "s|'||g")
+  declare -g env_prog_picker=$(yq e -o shell '.backends.picker' $conf_path | sed 's|value=||g' | sed "s|'||g")
+  declare -g env_cat_dir=$(yq '.env.cat-dir' $conf_path)
+  case $(yq e '.env.do-copy' $conf_path) in
+    true)
+      declare -g flag_do_copy=1
+    ;;
+    *)
+      declare -g flag_do_copy
+    ;;
+  esac
+
+  case $(yq e '.env.verbose' $conf_path) in
+    true)
+      declare -g flag_verbose=1
+    ;;
+    *)
+      declare -g flag_verbose
+    ;;
+  esac
+
+  case $(yq e '.env.return-found' $conf_path) in
+    true)
+      declare -g flag_return_result=1
+    ;;
+    *)
+      declare -g flag_return_result
+    ;;
+  esac
+}
 
 declare -g env_clipboard_command
 declare -g var_catpath
 declare -g flag_do_copy=1
 ## check if nabcat directory is specified in environment variable. if not, fallback to default.
 if [ $NABCAT_CAT_DIR ]; then
-  declare -g env_cat_dir="$NABCAT_CAT_DIR"
-else
-  declare -g env_cat_dir="$HOME/Pictures/Cats/"
+  if [ -z $env_cat_dir ]; then
+    gum log -s -l warn "Environment variable NABCAT_CAT_DIR depreciated as of 3.0.0, and the value was not found in $conf_path."
+    exit 7
+  fi
 fi
 declare -g env_picker="gum filter"
 declare -g flag_verbose
 declare -g flag_return_result
-declare -g flag_search_interactive
 declare -g flag_do_file_overwrite
 
-
 function nabcat_main() {
+  read_config
+  
   if [ $# -eq 0 ]; then
   	thatcat=$(nabcat_choose -cr)
     if [ -z "$(echo $thatcat | grep -Po '\/$')" ]; then
       if [ ! -z "$(command -v viu)" ]; then
-      	viu -w 30 "$thatcat"
+        eval $(echo "$env_prog_viewer \"$thatcat\"")
+        
+      	#viu -w 30 "$thatcat"
       fi
       gum log -s -l info "Copied \"$(echo $thatcat | grep -Po '(?<=\/)[a-zA-Z0-9\-_\s]+(?=\.)')\" to clipboard"
     else
@@ -90,37 +155,16 @@ function nabcat_main() {
 }
 
 function nabcat_info() {
-  feat_wl_clipboard_status="enabled"
-  feat_x11_clipboard_status="enabled"
-  feat_viu_preview_status="enabled"
-  	  	
-  if [ -z "$(command -v wl-copy)" ]; then
-    feat_wl_clipboard_status="disabled"
-  fi
   
-  if [ -z "$(command -v xsel)" ]; then
-  	feat_x11_clipboard_status="disabled"
-  fi
-
-  if [ -z "$(command -v viu)" ]; then
-  	feat_viu_preview_status="disabled"
-  fi
-
-  if [ $# -eq 0 ]; then
-  	echo "$env_version"
-    echo -e "WL_CLIPBOARD,$feat_wl_clipboard_status\nX11_CLIPBOARD,$feat_x11_clipboard_status\nVIU_PREVIEW,$feat_viu_preview_status" | gum table -c "FEATURE,STATUS" -p --border rounded
-  	exit 0
-  fi
-
   declare flag_V
-  declare flag_f
-  while getopts "Vf" opts; do
+  declare flag_y
+  while getopts "Vy" opts; do
 	case $opts in
 	  V)
 	    flag_V="true"
 	  ;;
-	  f)
-	    flag_f="true"
+	  y)
+	    flag_y="true"
 	  ;;
 	  *)
 	  	exit 3
@@ -129,7 +173,7 @@ function nabcat_info() {
   done
 
   [ -z $flag_V ] || echo "$env_version"
-  [ -z $flag_f ] || echo -e "WL_CLIPBOARD,$feat_wl_clipboard_status\nX11_CLIPBOARD,$feat_x11_clipboard_status\nVIU_PREVIEW,$feat_viu_preview_status" | gum table -c "FEATURE,STATUS" -p --border rounded
+  [ -z $flag_y ] || yq e '.' $conf_path
   exit 0
 }
 
@@ -158,13 +202,7 @@ function nabcat_random() {
   catname=$(echo "$retval" | grep -Po '(?<=\/)[a-zA-Z0-9\-_\s]+(?=\.)')
   [ $flag_verbose ] && gum log -s -l info "Retrieved $catname."
   if [ $flag_do_copy ]; then
-	case $XDG_SESSION_TYPE in
-		"x11")
-			xsel --selection --clipboard -t image/png -i "$retval"
-		;;
-		"wayland")
-			wl-copy < $retval
-	esac
+    eval $(echo "$env_prog_clipboard \"$retval\"")
 	gum log -s -l info "Copied \"$catname\" to clipboard."
   fi
   echo "$retval"
@@ -238,7 +276,7 @@ function nabcat_choose() {
         unset -v flag_do_copy
       ;;
       P)
-        env_picker="$OPTARG"
+        env_prog_picker="$OPTARG"
       ;;
       v)
         flag_verbose=1
@@ -252,7 +290,7 @@ function nabcat_choose() {
     esac
   done
   
-  cmd="ls $env_cat_dir | $env_picker"
+  cmd="ls $env_cat_dir | $env_prog_picker"
   var_catpath="$env_cat_dir$(eval $cmd)"
   ## prevent sending all cats in folder to output.
   catname=$(echo "$var_catpath" | grep -Po '(?<=\/)[a-zA-Z0-9\-_\s]+(?=\.)')
@@ -262,8 +300,6 @@ function nabcat_choose() {
   
   [ $flag_verbose ] && gum log -s -l info "Retrieved cat: $catname"
 
-  #echo "$var_catpath"
-  
   if [ $flag_do_copy ]; then
     if [ $flag_verbose ]; then
       gum log -s -l info "Copied \"$catname\" to clipboard."
@@ -273,7 +309,7 @@ function nabcat_choose() {
         wl-copy < $var_catpath
       ;;
       x11)
-      ##BUG: only works with PNGs
+      ##BUG: only works with PNGs. This is an upstream issue.
         xsel --selection --clipboard -t image/png -i "$var_catpath"
       ;;
       *)
@@ -322,18 +358,7 @@ function nabcat_get() {
       catname=$(echo "$var_catpath" | grep -Po '(?<=\/)[a-zA-Z0-9\-_\s]+(?=\.)')
       gum log -s -l info "Copied \"$catname\" to clipboard."
     fi
-    case "$XDG_SESSION_TYPE" in
-      wayland)
-        wl-copy < $var_catpath
-      ;;
-      x11)
-        xsel --selection --clipboard -t image/png -i "$var_catpath"
-      ;;
-      *)
-        echo "Display server not recognized. Expected either 'wayland' or 'x11' from \$XDG_SESSION_TYPE, got \"$XDG_SESSION_TYPE\""
-        exit 2
-    ;;
-    esac
+    eval $(echo "$env_prog_clipboard \"$var_catpath\"")
   fi
   ## output catpath for use in scripts. need a way to give completions.
   
@@ -411,10 +436,10 @@ function _list_help() {
 }
 
 function _info_help() {
-    declare -A flagarray_info=( ["-f"]="List features and their status." ["-V"]="Show nabcat's version." )
+    declare -A flagarray_info=( ["-V"]="Show the version." ["-y"]="Show the current config" )
 	
 	echo "INFO: Show available features and version."
-    echo "usage: nabcat info [-fV]"
+    echo "usage: nabcat info [-Vy]"
     echo -e "\nFlags:"
 	for key in ${(k)flagarray_info}; do
     printf '  %s\t%s\n' "$key" "$flagarray_info[$key]" | expand -t 15
@@ -425,10 +450,8 @@ function nabcat_help() {
   ## check $1 for name of command
   if [ -z "$1" ]; then
     ## if none found, print general help
-    declare -A deparray=( ["gum"]="Interactive choosing of cats." ["viu"]="(Optional) Image previewing." ["xsel"]="Clipboard functionality (X11 only)" ["wl-clipboard"]="Clipboard functionality (Wayland only)" )
     
-    echo "nabcat: quickly find cat images and send them to the clipboard for posting. If the environment variable NABCAT_CAT_DIR is not set, nabcat falls back to looking for cats in \$HOME/Pictures/Cats/. Make sure to include the trailing slash when setting this environment variable."
-    echo "USAGE: nabcat"
+    echo "nabcat: quickly find cat images and send them to the clipboard for posting."
     echo "       nabcat choose [-cCvr] [-P STRING] [-d PATH]"
     echo "       nabcat get [-d PATH] [-cCvr] FILENAME"
     echo "       nabcat random [-d PATH] [-v]"
@@ -436,12 +459,8 @@ function nabcat_help() {
     echo "       nabcat list [-d PATH]"
     echo "       nabcat help [?COMMAND]"
     echo ""
-    echo "Running the command without arguments is equivalent to running 'viu -w 30 \"\$(nabcat choose -cr)\"' if you have viu installed, and 'nabcat choose -cr' if you don't."
-    echo ""
-    echo "nabcat depends on the following external programs:"
-    for key in ${(k)deparray}; do
-      printf '  %s\t%s\n' "$key" "$deparray[$key]" | expand -t 15
-    done
+    echo "Running the command without arguments will attempt to invoke the viewer defined in your config's backends section on the result of 'nabcat choose -cr'"
+    
     echo -e "\nCOMMANDS:\n"
     _choose_help
     echo -e "\n"
